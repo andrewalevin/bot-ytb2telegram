@@ -180,7 +180,8 @@ async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     post_text = ''
     if not opus_file.exists():
-        command = f'yt-dlp --extract-audio --output {opus_file.with_suffix('').as_posix()} {url}'
+        output = opus_file.with_suffix('').as_posix()
+        command = f'yt-dlp --extract-audio --output {output} {url}'
         print('❤️ ', command)
         print()
 
