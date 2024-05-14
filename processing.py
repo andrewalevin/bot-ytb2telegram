@@ -266,7 +266,11 @@ async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ssl._create_default_https_context = ssl._create_stdlib_context
     yt = YouTube(url)
 
-    filename = re.sub(r'[^\w\s\-\_]', ' ', yt.title).replace('  ', ' ').strip()
+    filename = (re.sub(r'[^\w\s\-\_\(\)\[\]]', ' ', yt.title)
+                .replace('    ', ' ')
+                .replace('   ', ' ')
+                .replace('  ', ' ')
+                .strip())
     await context.bot.send_audio(
         chat_id=update.message.chat_id,
         audio=m4a_file.as_posix(),
