@@ -246,7 +246,7 @@ async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await post.edit_text(f'{post_text} \n\n 🟥 Unexpected error. [not thumbnail_file.exists()].')
 
     await post.edit_text('🟩 Add Cover to m4a \n ... ')
-    if True:
+    if False:
         # Adding cover to m4a
         command = f'mp4art --add {thumbnail_file.as_posix()} {m4a_file.as_posix()}'
         print('❤️ ', command)
