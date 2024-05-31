@@ -29,10 +29,6 @@ def list_scheduled_tasks():
 
 async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_split_minutes):
     print('🦀 Task Download start: ', movie_id)
-    print('📚 Tasks: ')
-    for task in list_scheduled_tasks():
-        print('🦆 Task: ', json.loads(task))
-    print()
 
     running_mode = get_running_mode()
     token = config_token.RUNNING_MODE_CONFIG_SENSITIVE[running_mode]['token']
