@@ -4,11 +4,28 @@ import re
 import time
 from urllib.parse import urlparse
 
+from dramatiq import Middleware, Broker
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from taskdownloading import task_download, task_downloading_container
 from url_parser import get_youtube_id, parse_input
+
+
+class ScheduledTaskCounter(Middleware):
+    def __init__(self):
+        super().__init__()
+        self.scheduled_task_count = 0
+
+    def after_enqueue(self, broker, message, sender):
+        if message.queue_name.startswith("dramatiq:scheduled:"):
+            self.scheduled_task_count += 1
+
+
+def get_scheduled_tasks_count():
+    broker = Broker(middlewares=[ScheduledTaskCounter()])
+
+    return broker.middleware[0].scheduled_task_count
 
 
 async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,6 +61,9 @@ async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     time.sleep(1)
     task_downloading_container.send(update.message.from_user.id, update.message.id, url, movie_id, post_status.id, opt_split_minutes)
+
+    print('Tasks: ', get_scheduled_tasks_count())
+
     print('💚 After call task: ', movie_id)
 
 

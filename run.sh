@@ -1,7 +1,7 @@
 #!/bin/bash
 
-source venv/bin/activate
+./run-queue.sh > log-queue.log 2>&1 &
 
-python3 main.py
+./run-bot.sh > log-bot.log 2>&1 &
 
-
+wait
