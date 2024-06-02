@@ -35,6 +35,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
     bot = Bot(token=token)
 
     log_text_top = f'⌛️ Downloading: ({movie_id})\n\n'
+    print('📭 Message', 1)
     await bot.editMessageText(
         chat_id=chat_id,
         message_id=post_status_id,
@@ -70,6 +71,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
                 continue
 
             try:
+                print('📭 Message', 2)
                 await bot.editMessageText(
                     chat_id=chat_id,
                     message_id=post_status_id,
@@ -80,6 +82,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
                 print('Some Error')
 
     if not m4a_file.exists():
+        print('📭 Message', 3)
         await bot.editMessageText(
             chat_id=chat_id,
             message_id=post_status_id,
@@ -93,6 +96,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
         return str(e)
 
     if not audio:
+        print('📭 Message', 4)
         await bot.editMessageText(
             chat_id=chat_id,
             message_id=post_status_id,
@@ -113,6 +117,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
         download_thumbnail(url, thumbnail_file.as_posix())
 
     if not thumbnail_file.exists():
+        print('📭 Message', 5)
         await bot.editMessageText(
             chat_id=chat_id,
             message_id=post_status_id,
@@ -126,6 +131,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
 
     if opt_split_minutes:
         print('⌛ Splitting ... ')
+        print('📭 Message', 6)
         await bot.editMessageText(
             chat_id=chat_id,
             message_id=post_status_id,
@@ -154,6 +160,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
             for m4a_obj in m4a_objs:
                 if not (file := m4a_obj.get('file')):
                     print(f'🟥 Error. [not (file := m4a_obj.get]')
+                    print('📭 Message', 7)
                     await bot.editMessageText(
                         chat_id=chat_id,
                         message_id=post_status_id,
@@ -164,6 +171,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
                 print(f'🔹 {file.name}')
                 if not file.exists():
                     print(f'🟥 {file.name} This File Unexpected exists!')
+                    print('📭 Message', 8)
                     await bot.editMessageText(
                         chat_id=chat_id,
                         message_id=post_status_id,
@@ -176,6 +184,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
         m4a_objs = [{'file': m4a_file, 'duration': duration_seconds}]
 
     print('⌛ Uploading to Telegram')
+    print('📭 Message', 9)
     await bot.editMessageText(
         chat_id=chat_id,
         message_id=post_status_id,
@@ -197,6 +206,7 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
             filename = f'(p{idx}-of{len(m4a_objs)}) {filename}'
             caption = f'[Part {idx} of {len(m4a_objs)}] {title}'
 
+        print('📭 Message', 10)
         await bot.send_audio(
             chat_id=chat_id,
             reply_to_message_id=reply_to_message_id,
