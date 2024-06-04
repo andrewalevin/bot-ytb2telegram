@@ -153,7 +153,6 @@ async def task_download(movie_id, opt_split_minutes):
     context['thumbnail'] = context['thumbnail'].as_posix()
     context['log'] = context['log'].as_posix()
 
-    context['error'] = '🟥 Test Error'
     print('🛵 CONTEXT: ', context)
     print()
 
