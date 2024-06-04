@@ -1,56 +1,57 @@
-# huey = SqliteHuey(filename='huey-queue.db')
-import asyncio
-import json
+
 import pathlib
 import subprocess
-import time
 
 import dramatiq
 import nest_asyncio
 from dramatiq.brokers.redis import RedisBroker
+from dramatiq.middleware import AsyncIO
+from dramatiq.results import Results
+from dramatiq.results.backends.redis import RedisBackend
 from mutagen.mp4 import MP4
-from telegram import Bot
-from telegram.ext import ContextTypes
 
 import config
-import config_token
-from token_telegram_bot import get_running_mode
-from utils_downloading import download_thumbnail, time_format, output_filename_in_telegram, make_split
+from utils_downloading import download_thumbnail, time_format, make_split, output_filename_in_telegram
+from huey import SqliteHuey
 
 redis_broker = RedisBroker()
+redis_broker.add_middleware(AsyncIO())
+
+result_backend = RedisBackend(url="redis://localhost:6379/0")
+
+redis_broker.add_middleware(Results(backend=result_backend))
+
 dramatiq.set_broker(redis_broker)
 
 nest_asyncio.apply()
 
+#   huey = SqliteHuey(filename='huey-table.db')
 
-def list_scheduled_tasks():
-    return redis_broker.zrange('dramatiq:default:deferred', 0, -1)
+#   @huey.task()
 
 
-async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_split_minutes):
+@dramatiq.actor(store_results=True)
+async def task_download(movie_id, opt_split_minutes):
     print('🦀 Task Download start: ', movie_id)
 
-    running_mode = get_running_mode()
-    token = config_token.RUNNING_MODE_CONFIG_SENSITIVE[running_mode]['token']
-    bot = Bot(token=token)
-
-    log_text_top = f'⌛️ Downloading: ({movie_id})\n\n'
-    print('📭 Message', 1)
-    await bot.editMessageText(
-        chat_id=chat_id,
-        message_id=post_status_id,
-        text=log_text_top
-    )
-
+    context = dict()
+    context['error'] = ''
+    context['log'] = ''
+    context['audios'] = []
+    context['thumbnail'] = ''
 
     data_dir = pathlib.Path(config.DATA_DIR)
     data_dir.mkdir(parents=True, exist_ok=True)
 
     m4a_file = data_dir.joinpath(f'{movie_id}.m4a')
 
+    url_reconstructed = f'https://youtu.be/{movie_id}'
+
+    context['log'] = data_dir.joinpath(f'{movie_id}.log')
     if not m4a_file.exists():
-        command = f'yt-dlp {config.YT_DLP_OPTIONS_DEFAULT} --output {m4a_file.as_posix()} {url}'
+        command = f'yt-dlp {config.YT_DLP_OPTIONS_DEFAULT} --output {m4a_file.as_posix()} {url_reconstructed}'
         print('❤️ BASH: ', command)
+
         process = subprocess.Popen(
             command.split(' '),
             stdout=subprocess.PIPE,
@@ -58,85 +59,59 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
             universal_newlines=True)
 
         log_rows = []
-        log_text = ''
-        log_last_text = ''
         for line in process.stdout:
-            print(line.strip())
-            log_rows.append(line.strip())
+            line = line.strip()
+            line = line.replace('https://youtu.be/', '').replace('https://www.youtube.com/', '')
+            log_rows.append(line)
 
-            log_text = log_text_top + '\n'.join(log_rows[-config.LOG_ROWS_COUNT:]) + '\n ... '
-            log_text = log_text.replace('https://youtu.be/', '').replace('https://www.youtube.com/', '')
-
-            if log_text == log_last_text:
-                continue
-
-            try:
-                print('📭 Message', 2)
-                await bot.editMessageText(
-                    chat_id=chat_id,
-                    message_id=post_status_id,
-                    text=log_text
-                )
-                log_last_text = log_text
-            except Exception as e:
-                print('Some Error')
+        with context['log'].open(mode='w') as f:
+            f.write('\n'.join(log_rows))
 
     if not m4a_file.exists():
-        print('📭 Message', 3)
-        await bot.editMessageText(
-            chat_id=chat_id,
-            message_id=post_status_id,
-            text=f'🟥 Unexpected error in yt-dlp. [not m4a_file.exists()].\n\n {log_text}'
-        )
-        return
+        context['error'] = f'🟥 Unexpected error in yt-dlp. [not m4a_file.exists()].'
+        return context
 
     try:
         audio = MP4(m4a_file.as_posix())
     except Exception as e:
-        return str(e)
+        context['error'] = f'🟥 Exception as e: [audio = MP4(m4a_file.as_posix())].'
+        return context
 
     if not audio:
-        print('📭 Message', 4)
-        await bot.editMessageText(
-            chat_id=chat_id,
-            message_id=post_status_id,
-            text='🟥 Unexpected error. [not audio in MP4 metadata].'
-        )
-        return
+        context['error'] = '🟥 Unexpected error. [not audio in MP4 metadata].'
+        return context
 
-    title = str(movie_id)
+    title_orig = str(movie_id)
     if audio.get('\xa9nam'):
-        title = audio.get('\xa9nam')[0]
+        title_orig = audio.get('\xa9nam')[0]
 
     duration_seconds = None
     if audio.info.length:
         duration_seconds = int(audio.info.length)
 
-    thumbnail_file = data_dir.joinpath(f'{movie_id}.jpg')
-    if not thumbnail_file.exists():
-        download_thumbnail(url, thumbnail_file.as_posix())
+    context['thumbnail'] = data_dir.joinpath(f'{movie_id}.jpg')
+    if not context['thumbnail'].exists():
+        download_thumbnail(url_reconstructed, context['thumbnail'].as_posix())
 
-    if not thumbnail_file.exists():
-        print('📭 Message', 5)
-        await bot.editMessageText(
-            chat_id=chat_id,
-            message_id=post_status_id,
-            text=f'🟥 One problem. [not thumbnail_file.exists()]. Continue'
-        )
-        time.sleep(3)
+    if not context['thumbnail'].exists():
+        context['error'] = f'🟥 One problem. [not thumbnail.exists()]. Continue'
+        return context
 
-    m4a_objs = []
     if duration_seconds > config.SPLIT_THRESHOLD_MINUTES * 60:
         opt_split_minutes = config.SPLIT_AUDIO_DURATION_MINUTES
 
+    filename = output_filename_in_telegram(title_orig)
+
+    context['audios'] = [{
+        'path': m4a_file.as_posix(),
+        'duration': duration_seconds,
+        'caption': title_orig,
+        'filename': filename,
+    }]
+
     if opt_split_minutes:
+        # todo
         print('⌛ Splitting ... ')
-        print('📭 Message', 6)
-        await bot.editMessageText(
-            chat_id=chat_id,
-            message_id=post_status_id,
-            text='⌛ Splitting \n ... '
-        )
 
         m4a_parts = make_split(m4a_file, duration_seconds, opt_split_minutes, config.SPLIT_DELTA_SECONDS)
         print('m4a_parts: ', m4a_parts)
@@ -144,8 +119,10 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
             cmds_list = []
             for idx, part in enumerate(m4a_parts, start=1):
                 output_file = m4a_file.with_stem(f'{m4a_file.stem}-p{idx}-of{len(m4a_parts)}')
-                m4a_objs.append({'file': output_file, 'duration': part[1] - part[0]})
-                #   https://www.youtube.com/watch?v=HlwTLyfB3QU
+                filename_local = f'(p{idx}-of{len(m4a_parts)}) {filename}'
+                caption_local = f'[Part {idx} of {len(m4a_parts)}] {title_orig}'
+                title = f''
+                context['audios'].append({'file': output_file.as_posix(), 'duration': part[1] - part[0]})
                 cmd = f'ffmpeg -i {m4a_file.as_posix()} -ss {time_format(part[0])} -to {time_format(part[1])} -c copy -y {output_file.as_posix()}'
                 print(cmd)
                 cmds_list.append(cmd.split(' '))
@@ -157,83 +134,29 @@ async def task_download(chat_id, message_id, url, movie_id, post_status_id, opt_
                 process.wait()
 
             print("🟢 All Done! Lets see .m4a files and their length")
-            for m4a_obj in m4a_objs:
+            for m4a_obj in context['audios']:
                 if not (file := m4a_obj.get('file')):
-                    print(f'🟥 Error. [not (file := m4a_obj.get]')
-                    print('📭 Message', 7)
-                    await bot.editMessageText(
-                        chat_id=chat_id,
-                        message_id=post_status_id,
-                        text=f'🟥 Error [not (file := m4a_obj.get]'
-                    )
-                    return
+                    context['error'] = '🟥 Error. [not (file := m4a_obj.get]'
+                    return context
 
                 print(f'🔹 {file.name}')
                 if not file.exists():
-                    print(f'🟥 {file.name} This File Unexpected exists!')
-                    print('📭 Message', 8)
-                    await bot.editMessageText(
-                        chat_id=chat_id,
-                        message_id=post_status_id,
-                        text=f'🟥 {file.name} This File Unexpected exists!'
-                    )
-                    return
-        else:
-            m4a_objs = [{'file': m4a_file, 'duration': duration_seconds}]
-    else:
-        m4a_objs = [{'file': m4a_file, 'duration': duration_seconds}]
+                    context['error'] = f'🟥 {file.name} This File Unexpected exists!'
+                    return context
 
-    print('⌛ Uploading to Telegram')
-    print('📭 Message', 9)
-    await bot.editMessageText(
-        chat_id=chat_id,
-        message_id=post_status_id,
-        text='⌛ Uploading to Telegram \n ... '
-    )
+        if False:
+            # todo
+            if len(data.get('audios')) > 1:
+                filename = f'(p{idx}-of{len(m4a_objs)}) {filename}'
+                caption = f'[Part {idx} of {len(m4a_objs)}] {title}'
 
-    for idx, obj in enumerate(m4a_objs, start=1):
-        reply_to_message_id = message_id
-        if idx > 1:
-            reply_to_message_id = None
+    context['thumbnail'] = context['thumbnail'].as_posix()
+    context['log'] = context['log'].as_posix()
 
-        file = obj.get('file')
-        filename = output_filename_in_telegram(title)
-        caption = title
-        duration = obj.get('duration')
-        thumbnail = thumbnail_file.open('rb')
-
-        if len(m4a_objs) > 1:
-            filename = f'(p{idx}-of{len(m4a_objs)}) {filename}'
-            caption = f'[Part {idx} of {len(m4a_objs)}] {title}'
-
-        print('📭 Message', 10)
-        await bot.send_audio(
-            chat_id=chat_id,
-            reply_to_message_id=reply_to_message_id,
-            audio=file,
-            duration=duration,
-            filename=filename,
-            thumbnail=thumbnail,
-            caption=caption
-        )
-
-    await bot.delete_message(chat_id=chat_id,message_id=post_status_id)
-
-    print('👍 Success!')
-    if len(m4a_objs) > 1:
-        for obj in m4a_objs:
-            file = obj.get('file')
-            file.unlink()
-
+    context['error'] = '🟥 Test Error'
+    print('🛵 CONTEXT: ', context)
     print()
 
+    return context
 
-@dramatiq.actor
-def task_downloading_container(chat_id, message_id, url, movie_id, post_status_id, opt_split_minutes):
-    print('🍎 task_downloading_container: ')
-    loop = asyncio.get_event_loop()
-    future = asyncio.ensure_future(task_download(chat_id, message_id, url, movie_id, post_status_id, opt_split_minutes))
-    loop.run_until_complete(future)
-    result = future.result()
 
-    print('🍎 After asyncio in task')

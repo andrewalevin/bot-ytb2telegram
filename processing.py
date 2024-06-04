@@ -1,14 +1,15 @@
 #!/usr/bin/env python
-
+import pathlib
 import re
 import time
 from urllib.parse import urlparse
 
+import huey
 from dramatiq import Middleware, Broker
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from taskdownloading import task_download, task_downloading_container
+from taskdownloading import task_download
 from url_parser import get_youtube_id, parse_input
 
 
@@ -23,9 +24,9 @@ class ScheduledTaskCounter(Middleware):
 
 
 def get_scheduled_tasks_count():
-    broker = Broker(middlewares=[ScheduledTaskCounter()])
-
-    return broker.middleware[0].scheduled_task_count
+    pending_tasks = huey.pending()
+    for task in pending_tasks:
+        print(f'Task ID: {task.id}, Task Data: {task.data}')
 
 
 async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,17 +53,41 @@ async def make_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print('🦀 Split ', match)
             opt_split_minutes = value
 
-    log_text_top = f'⌛️ Queued: ({movie_id})\n\n'
     post_status = await context.bot.send_message(
         chat_id=update.message.from_user.id,
         reply_to_message_id=update.message.id,
-        text=log_text_top + ' ... '
+        text=f'⌛️ Downloading: \n ... '
     )
 
-    time.sleep(1)
-    task_downloading_container.send(update.message.from_user.id, update.message.id, url, movie_id, post_status.id, opt_split_minutes)
+    task_message = task_download.send(movie_id, opt_split_minutes)
 
-    print('Tasks: ', get_scheduled_tasks_count())
+    #todo
+    data = task_message.get_result(block=True, timeout=100000)
+    print('🚛 DATA: ', data)
+    print()
+
+    if data.get('error'):
+        print('🍒 Make error log')
+        with pathlib.Path(data.get('log')).open('r') as log_file:
+            text = data.get('error') + '\n\n' + log_file.read()
+            await post_status.edit_text(text)
+            return
+
+    await post_status.edit_text('⌛ Uploading to Telegram \n ... ')
+
+    for idx, audio in enumerate(data.get('audios'), start=1):
+        with pathlib.Path(data.get('thumbnail')).open('rb') as thumbnail_file:
+            await context.bot.send_audio(
+                chat_id=update.message.from_user.id,
+                reply_to_message_id=None if idx > 1 else update.message.id,
+                audio=audio.get('path'),
+                duration=audio.get('duration'),
+                filename=audio.get('filename'),
+                thumbnail=thumbnail_file,
+                caption=audio.get('caption')
+            )
+
+        await post_status.delete()
 
     print('💚 After call task: ', movie_id)
 
